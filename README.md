@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # AVA — AI Voice Assistant
 
 A production-ready full-stack AI Voice Assistant web application with real-time voice conversations, streaming chat, custom AI agents, analytics, and more.
@@ -242,3 +243,6 @@ docker-compose down -v     # Stop + delete volumes
 ## 📄 License
 
 MIT — see [LICENSE](LICENSE) for details.
+=======
+# Ava
+>>>>>>> f7f26bb2a674f18ae0b8f663ee2ddfc85742e779
