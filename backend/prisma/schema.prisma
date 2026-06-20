@@ -1,0 +1,275 @@
+// This is your Prisma schema file
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  USER
+  ADMIN
+  SUPER_ADMIN
+}
+
+enum MessageRole {
+  user
+  assistant
+  system
+}
+
+enum MessageType {
+  TEXT
+  VOICE
+  FILE
+  IMAGE
+}
+
+enum NotificationType {
+  INFO
+  SUCCESS
+  WARNING
+  ERROR
+}
+
+enum SubscriptionPlan {
+  FREE
+  PRO
+  ENTERPRISE
+}
+
+enum AIModel {
+  gpt_4o       @map("gpt-4o")
+  gpt_4o_mini  @map("gpt-4o-mini")
+  gpt_4_turbo  @map("gpt-4-turbo")
+}
+
+model User {
+  id            String    @id @default(uuid())
+  name          String
+  email         String    @unique
+  password      String?
+  avatar        String?
+  bio           String?
+  location      String?
+  role          UserRole  @default(USER)
+  emailVerified Boolean   @default(false)
+  emailVerifyToken String?
+  resetPasswordToken String?
+  resetPasswordExpires DateTime?
+  oauthProvider String?
+  oauthId       String?
+  twoFactorEnabled Boolean @default(false)
+  twoFactorSecret  String?
+
+  conversations  Conversation[]
+  messages       Message[]
+  agents         Agent[]
+  files          UploadedFile[]
+  notifications  Notification[]
+  settings       UserSettings?
+  subscription   Subscription?
+  sessions       Session[]
+  analytics      Analytics[]
+  auditLogs      AuditLog[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("users")
+}
+
+model Session {
+  id           String   @id @default(uuid())
+  userId       String
+  refreshToken String   @unique
+  userAgent    String?
+  ipAddress    String?
+  expiresAt    DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt    DateTime @default(now())
+
+  @@map("sessions")
+}
+
+model Conversation {
+  id        String   @id @default(uuid())
+  title     String
+  userId    String
+  agentId   String?
+  isStarred Boolean  @default(false)
+  isPinned  Boolean  @default(false)
+  isArchived Boolean @default(false)
+
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  agent     Agent?    @relation(fields: [agentId], references: [id])
+  messages  Message[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("conversations")
+}
+
+model Message {
+  id             String      @id @default(uuid())
+  conversationId String
+  userId         String
+  role           MessageRole
+  content        String      @db.Text
+  type           MessageType @default(TEXT)
+  fileUrl        String?
+  audioUrl       String?
+  tokens         Int?
+  isEdited       Boolean     @default(false)
+
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  reactions      MessageReaction[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("messages")
+}
+
+model MessageReaction {
+  id        String   @id @default(uuid())
+  messageId String
+  userId    String
+  emoji     String
+  message   Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([messageId, userId, emoji])
+  @@map("message_reactions")
+}
+
+model Agent {
+  id           String   @id @default(uuid())
+  name         String
+  description  String
+  systemPrompt String   @db.Text
+  avatar       String?
+  personality  String?
+  model        AIModel  @default(gpt_4o)
+  userId       String
+  isPublic     Boolean  @default(false)
+  isDefault    Boolean  @default(false)
+
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  conversations Conversation[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("agents")
+}
+
+model UploadedFile {
+  id             String   @id @default(uuid())
+  name           String
+  originalName   String
+  url            String
+  mimeType       String
+  size           Int
+  userId         String
+  conversationId String?
+  summary        String?  @db.Text
+  isProcessed    Boolean  @default(false)
+
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@map("uploaded_files")
+}
+
+model Analytics {
+  id           String   @id @default(uuid())
+  userId       String
+  date         DateTime @db.Date
+  conversations Int     @default(0)
+  messages     Int      @default(0)
+  voiceSessions Int     @default(0)
+  tokensUsed   Int      @default(0)
+  sessionDuration Int   @default(0)
+
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, date])
+  @@map("analytics")
+}
+
+model Notification {
+  id        String           @id @default(uuid())
+  userId    String
+  title     String
+  message   String
+  type      NotificationType @default(INFO)
+  read      Boolean          @default(false)
+  link      String?
+
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@map("notifications")
+}
+
+model UserSettings {
+  id                   String  @id @default(uuid())
+  userId               String  @unique
+  theme                String  @default("system")
+  language             String  @default("en")
+  voiceEnabled         Boolean @default(true)
+  voiceId              String  @default("alloy")
+  voiceSpeed           Float   @default(1.0)
+  voicePitch           Float   @default(1.0)
+  notificationsEnabled Boolean @default(true)
+  emailNotifications   Boolean @default(true)
+  soundEnabled         Boolean @default(true)
+  autoSaveChats        Boolean @default(true)
+
+  user                 User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_settings")
+}
+
+model Subscription {
+  id               String           @id @default(uuid())
+  userId           String           @unique
+  plan             SubscriptionPlan @default(FREE)
+  status           String           @default("active")
+  currentPeriodEnd DateTime?
+  cancelAtPeriodEnd Boolean         @default(false)
+  stripeCustomerId  String?
+  stripeSubId       String?
+
+  user             User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("subscriptions")
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  userId    String?
+  action    String
+  resource  String
+  resourceId String?
+  details   Json?
+  ipAddress String?
+  userAgent String?
+
+  user      User?    @relation(fields: [userId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@map("audit_logs")
+}
