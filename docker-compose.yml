@@ -1,0 +1,194 @@
+# AVA — AI Voice Assistant
+# 100% FREE stack: Ollama (LLM) + faster-whisper (STT) + Piper (TTS)
+# No API keys. No subscriptions. Runs entirely on your machine.
+
+services:
+
+  # ── PostgreSQL ───────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: ava_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-ava_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ava_password}
+      POSTGRES_DB: ${POSTGRES_DB:-ava_db}
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-ava_user}']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Redis ────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: ava_redis
+    restart: unless-stopped
+    ports:
+      - '6379:6379'
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Ollama — FREE local LLM (llama3.2, mistral, etc.) ───
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ava_ollama
+    restart: unless-stopped
+    ports:
+      - '11434:11434'
+    volumes:
+      - ollama_data:/root/.ollama
+    # GPU support (optional — remove if no GPU)
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+    healthcheck:
+      test: ['CMD-SHELL', 'curl -sf http://localhost:11434/api/tags || exit 1']
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # ── Ollama model puller — runs once on startup ───────────
+  ollama-init:
+    image: curlimages/curl:latest
+    container_name: ava_ollama_init
+    restart: 'no'
+    depends_on:
+      ollama:
+        condition: service_healthy
+    entrypoint: >
+      sh -c "
+        echo '🤖 Pulling llama3.2 model (first run only, ~2GB)...' &&
+        curl -s -X POST http://ollama:11434/api/pull -d '{\"name\":\"llama3.2\"}' &&
+        echo '✅ Model ready!'
+      "
+
+  # ── faster-whisper — FREE local Speech-to-Text ──────────
+  whisper:
+    image: fedirz/faster-whisper-server:latest-cpu
+    container_name: ava_whisper
+    restart: unless-stopped
+    ports:
+      - '9000:8000'
+    environment:
+      WHISPER__MODEL: base
+      # Use 'small' or 'medium' for better accuracy (larger download)
+    volumes:
+      - whisper_data:/root/.cache/huggingface
+    healthcheck:
+      test: ['CMD-SHELL', 'curl -sf http://localhost:8000/health || exit 1']
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
+  # ── Piper TTS — FREE local Text-to-Speech ───────────────
+  piper:
+    image: ghcr.io/rhasspy/piper:latest
+    container_name: ava_piper
+    restart: unless-stopped
+    ports:
+      - '5000:5000'
+    volumes:
+      - piper_data:/app/voices
+    entrypoint: >
+      sh -c "
+        mkdir -p /app/voices &&
+        [ -f /app/voices/en_US-amy-medium.onnx ] || (
+          wget -q -O /app/voices/en_US-amy-medium.onnx
+          https://github.com/rhasspy/piper/releases/download/v1.2.0/voice-en-us-amy-medium.tar.gz &&
+          echo 'Voice model ready'
+        ) &&
+        python3 -m piper.http_server --host 0.0.0.0 --port 5000
+        --model /app/voices/en_US-amy-medium.onnx
+      "
+    healthcheck:
+      test: ['CMD-SHELL', 'curl -sf http://localhost:5000/health || exit 1']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # ── Mailpit — FREE local email (dev only) ───────────────
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: ava_mailpit
+    restart: unless-stopped
+    ports:
+      - '8025:8025'   # Web UI — view emails at http://localhost:8025
+      - '1025:1025'   # SMTP
+    environment:
+      MP_MAX_MESSAGES: 100
+
+  # ── Backend API ──────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: ava_backend
+    restart: unless-stopped
+    env_file: ./backend/.env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-ava_user}:${POSTGRES_PASSWORD:-ava_password}@postgres:5432/${POSTGRES_DB:-ava_db}
+      REDIS_URL: redis://redis:6379
+      OLLAMA_BASE_URL: http://ollama:11434/v1
+      WHISPER_URL: http://whisper:8000
+      PIPER_URL: http://piper:5000
+      SMTP_HOST: mailpit
+      SMTP_PORT: 1025
+    ports:
+      - '5001:5000'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+    volumes:
+      - ./backend/uploads:/app/uploads
+
+  # ── Frontend ─────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: ava_frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+
+  # ── Nginx reverse proxy ──────────────────────────────────
+  nginx:
+    image: nginx:alpine
+    container_name: ava_nginx
+    restart: unless-stopped
+    ports:
+      - '80:80'
+    volumes:
+      - ./docker/nginx/nginx.conf:/etc/nginx/nginx.conf
+    depends_on:
+      - frontend
+      - backend
+
+volumes:
+  postgres_data:
+  redis_data:
+  ollama_data:
+  whisper_data:
+  piper_data:
